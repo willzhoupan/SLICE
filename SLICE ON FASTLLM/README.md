@@ -108,7 +108,7 @@ ftllm export /mnt/DeepSeek-V3 -o /mnt/DeepSeek-V3-FP16INT4 --dtype float16 --moe
 
 #### 加载导出后的模型
 
-导出后的模型使用方法和原始模型类似，使用导出模型时`--dtype`参数将被忽略
+导出后的模型使用方法和原始模型类似，使用导出模型时`--dtype`参数将被忽略。
 
 例如
 
