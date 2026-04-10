@@ -9,7 +9,7 @@
 ## 快速启动
 
 ```bash
-git clone https://github.com/willzhoupan/docker-mininet
+git clone https://github.com/willzhoupan/SLICE
 
 cd slice
 mkdir build
