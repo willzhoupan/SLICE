@@ -64,7 +64,7 @@ Install vLLM with `pip` or [from source](https://docs.vllm.ai/en/latest/getting_
 pip install vllm
 ```
 
-Visit our [documentation](https://docs.vllm.ai/en/latest/) to learn more.
+Visit our [documentation](https://docs.vllm.ai/en/latest/) to learn more
 
 - [Installation](https://docs.vllm.ai/en/latest/getting_started/installation.html)
 - [Quickstart](https://docs.vllm.ai/en/latest/getting_started/quickstart.html)
