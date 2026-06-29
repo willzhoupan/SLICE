@@ -341,6 +341,15 @@ class Scheduler(SchedulerInterface):
         self._slice_last_active_req_ids: set[str] = set()
         # Periodic debug counter for SLICE.
         self._slice_debug_step: int = 0
+        # 饥饿预防：为 A/B 两类非实时任务设置专属阈值（单位：秒）
+        self.hunger_coefficient = 5
+        # 当某类任务连续未调度时长超过该阈值时，将提升该类中最新抵达请求的 U值
+        self.task_type_thresholds: dict[str, tuple[float, float]] = {
+            "A": (0.1 * self.hunger_coefficient, 10),
+            #"B": (0.08 * self.hunger_coefficient, 12.5),
+        }
+        # 记录每类任务最后一次被调度的时间（初始化为当前时间）
+        self.last_scheduled_time: dict[str, float] = defaultdict(lambda: time.time())
 
         self.jobs: List[Dict[str, Any]] = []
         self.task_index = 0
@@ -348,6 +357,7 @@ class Scheduler(SchedulerInterface):
         # SLICE: build jobs + optimize_job_priority + reorder running (perf_counter 累计).
         self._slice_priority_optimize_total_s: float = 0.0
         self._slice_priority_optimize_invocations: int = 0
+
 
 
 
@@ -403,7 +413,7 @@ class Scheduler(SchedulerInterface):
 
 
     def update_u_value(self, request: Request):
-
+        pass
 
 
     def _construct_matrix(self):
@@ -443,6 +453,16 @@ class Scheduler(SchedulerInterface):
                     row[j] = 0
             
             self.slice_matrix.append(row)
+
+    def _get_task_type_by_tpot(self, request: Request) -> str | None:
+        tpot = getattr(request, 'tpot_target', None)
+        if tpot is None:
+            return None
+        if tpot == 100:
+            return 'A'
+        elif tpot == 120:
+            return 'B'
+        return None
         
     
     
@@ -488,26 +508,48 @@ class Scheduler(SchedulerInterface):
         self.kv_cache_manager.new_step_starts()
 
         
+        now = time.time()
+        for task_type, (hunger_threshold, fixed_threshold) in self.task_type_thresholds.items():
+            if (now - self.last_scheduled_time[task_type] > hunger_threshold
+                    and any(self._get_task_type_by_tpot(req) == task_type
+                            for req in self.waiting)):
+                # 找到 waiting 中该类任务且最新抵达的请求
+                type_reqs = [req for req in self.waiting
+                             if self._get_task_type_by_tpot(req) == task_type]
+                if type_reqs:
+                    # 取最新抵达的arrival_time
+                    latest_req = min(type_reqs, key=lambda r: r.arrival_time)
+                    #更新U值 
+                    latest_req.u_value = fixed_threshold
+                    # 重置该类任务的“连续未调度”计时，避免反复提升
+                    self.last_scheduled_time[task_type] = time.time()
+        
+
 
         if self.need_reconstruct:
             # 标记重构完成
             self.need_reconstruct = False
             
             self.matrix_pending_queue.clear()
-            
+
             
             all_active_requests = list(self.running) + list(self.waiting)
 
+
+            
             for req in self.waiting:
                 req.reward = req.u_value * req.tpot_target
 
                 cur_arriver_time = time.time() - req.arrival_time
+
                 
                 if cur_arriver_time > 5:
                     req.reward = req.reward * 0.1
-            
+
             
             all_active_requests.sort(key=lambda r: getattr(r, 'reward', 0), reverse=True)
+
+
     
             l_values = [37.65000995134807, 38.35795419503941, 38.433698524955574, 39.53421860933304, 40.73566885821464, 39.60176118656652, 38.32244135809081, 38.18219937810689, 39.04834479264176, 39.59275359813948, 45.227625577902515, 48.52995898517716, 48.231050315249064, 48.280466283948826, 48.72943381316789, 48.83874757997407, 48.62343587464731, 48.61373059053457, 48.46265220317905, 48.407275976172386, 48.46606089356746, 41.02197557488698, 38.944127436243846, 39.523568203431054, 39.77572281652962, 40.1280565571239, 40.08009635935758, 40.402339088894024, 40.13311911999952, 40.182390214718936, 39.990200184797516, 40.00374173589108, 39.85409290025025, 40.178920839067175, 40.392690686551674, 40.105083886221166, 40.009207881361476, 40.19766224846812, 40.24187509567683, 40.084449361071336, 40.282438359870255, 39.981688166620174, 40.286176745559416, 40.34006662439299, 42.199366427389265, 49.41135393242345, 49.058133579847464, 48.8754875019534, 49.15128294236332, 49.088023055543886, 49.00598889287873, 49.11666035737473, 50.506586638780746, 51.77267180306131, 52.29831513916624, 52.45175409945659, 53.148267802316695, 54.67991356778404, 54.00349912436112, 54.012746004195044, 54.6780382043549, 54.896158769472756, 55.493211663080814, 56.11568378379284, 57.64027803414623, 58.19821430486627, 58.950938502675854, 58.879672385597786, 59.33292957572893, 58.49157214666215, 59.48161189623464, 59.633428714453025, 59.973717457726245, 61.00501765807469, 61.99592176736111, 60.39088908749233, 60.63840546955665, 61.18803971343571, 61.29144358552165, 61.50136557304197, 62.721254996361985, 63.72959976521346, 63.22357687785958, 62.539839212937906, 62.88096390198916, 62.969128902676935, 63.343608276570734, 63.66700544022024, 59.717393665732935, 59.57154543639338, 59.82745097072657, 60.0052729156638, 59.17167331011394, 59.43931070214603, 59.496260179003, 59.617579276836565, 61.35399702661, 64.59350657109388, 64.55772845545631, 64.74323172569852]
             tasks_with_ratio = []
@@ -568,7 +610,8 @@ class Scheduler(SchedulerInterface):
         self.slice_matrix_index += 1
         if self.slice_matrix_index >= 50:
             self.slice_matrix_index = 1
-
+        
+        
       
             
         # First, schedule the RUNNING requests.
@@ -698,7 +741,10 @@ class Scheduler(SchedulerInterface):
                         # 选择reward值最小的抢占任务
                         preempted_req = self.running[-1]
                         self.running.remove(preempted_req)
-                        
+                        if (preempted_req.tpot_target == 50):
+                            print("实时任务被抢占")
+                        else:
+                            print("preempted_req.tpot_target:"+str(preempted_req.tpot_target))
 
                     self._preempt_request(preempted_req, scheduled_timestamp)
                 
@@ -1104,6 +1150,13 @@ class Scheduler(SchedulerInterface):
                     self.kv_cache_manager.get_num_common_prefix_blocks(any_request_id)
                 )
 
+        
+        # 更新各类任务的最后调度时间（仅当 waiting 中的请求被成功调度时才更新）
+        for req in itertools.chain(scheduled_new_reqs, scheduled_resumed_reqs):
+            task_type = self._get_task_type_by_tpot(req)
+            if task_type:
+                self.last_scheduled_time[task_type] = time.time()
+        
         # Construct the scheduler output.
         if self.use_v2_model_runner:
             scheduled_new_reqs = scheduled_new_reqs + scheduled_resumed_reqs
