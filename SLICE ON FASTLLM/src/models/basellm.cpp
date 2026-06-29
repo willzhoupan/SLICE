@@ -603,7 +603,7 @@ namespace fastllm {
                                 
                                 try {
                                     int totalTPOT = 0;
-                                    totalTPOT = model->scheduler.GetNextBatch(tokencountindex, model->ratios);
+                                    totalTPOT = model->scheduler.GetNextBatch(tokencountindex, model->ratios,model->enableStarvation);
                                     nextBatch = model->scheduler.currentBatch;
                                 } catch (const std::exception& e) {
                                     printf("Exception in GetNextBatch: %s\n", e.what());
@@ -1814,9 +1814,90 @@ namespace fastllm {
 
 
     
-    int SLICEScheduler::GetNextBatch(int tokencountindex, double ratios) {
+    int SLICEScheduler::GetNextBatch(int tokencountindex, double ratios, bool enableStarvation) {
 
          std::lock_guard<std::mutex> lock(schedulerMutex);
+        
+        if(enableStarvation) {
+            auto now = std::chrono::system_clock::now();
+            for (const auto& [task_type, thresholds] : task_type_thresholds) {
+                float hunger_threshold = thresholds.first * starvation_threshold;   // hunger_threshold
+                float fixed_threshold = thresholds.second;   // fixed_threshold
+                int boostHandleId = -1;
+                auto latestArrival = std::chrono::system_clock::time_point::min();
+                if(task_type == "A") {
+                    auto duration = std::chrono::duration<double>(now - StarvationTime_A).count();
+                    if(duration > hunger_threshold) {
+                        
+                        for (int handleId : priorityQueues[1]) {
+                            auto ctxIt = handleToContext.find(handleId);
+                            if (ctxIt == handleToContext.end() || !ctxIt->second || ctxIt->second->isEnding) {
+                                continue;
+                            }
+                            if (ctxIt->second->TPOT != 100) {
+                                continue;
+                            }
+                            auto arrivalIt = handleStartTime.find(handleId);
+                            if (arrivalIt == handleStartTime.end()) {
+                                continue;
+                            }
+                            if (arrivalIt->second > latestArrival) {
+                                latestArrival = arrivalIt->second;
+                                boostHandleId = handleId;
+                            }
+
+                        }
+                    }
+
+                    if (boostHandleId < 0) {
+                        continue;
+                    }
+
+                    auto boostCtx = handleToContext.find(boostHandleId);
+                    if (boostCtx == handleToContext.end() || !boostCtx->second || boostCtx->second->isEnding) {
+                        continue;
+                    }
+                    boostCtx->second->reward = fixed_threshold * boostCtx->second->TPOT;
+                    StarvationTime_A = now;
+                
+                } else if(task_type == "B") {
+                    auto duration = std::chrono::duration<double>(now - StarvationTime_B).count();
+                    if(duration > hunger_threshold) {
+                        
+                        for (int handleId : priorityQueues[1]) {
+                            auto ctxIt = handleToContext.find(handleId);
+                            if (ctxIt == handleToContext.end() || !ctxIt->second || ctxIt->second->isEnding) {
+                                continue;
+                            }
+                            if (ctxIt->second->TPOT != 120) {
+                                continue;
+                            }
+                            auto arrivalIt = handleStartTime.find(handleId);
+                            if (arrivalIt == handleStartTime.end()) {
+                                continue;
+                            }
+                            if (arrivalIt->second > latestArrival) {
+                                latestArrival = arrivalIt->second;
+                                boostHandleId = handleId;
+                            }
+
+                        }
+                    }
+
+                    if (boostHandleId < 0) {
+                        continue;
+                    }
+
+                    auto boostCtx = handleToContext.find(boostHandleId);
+                    if (boostCtx == handleToContext.end() || !boostCtx->second || boostCtx->second->isEnding) {
+                        continue;
+                    }
+                    boostCtx->second->reward = fixed_threshold * boostCtx->second->TPOT;
+                    StarvationTime_B = now;
+                    }
+                }
+
+        }
 
         if(slice.Callmatrix == true) {
         
